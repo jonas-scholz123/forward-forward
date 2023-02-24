@@ -16,7 +16,7 @@ from typing import NamedTuple, Tuple
 import optax
 
 from dataloaders import FlattenAndCast, NumpyLoader, prepend_false_labels, prepend_labels
-from visualise import show
+from utils import show, batch
 
 def relu(x):
     return jnp.maximum(0, x)
@@ -90,7 +90,7 @@ class Layer:
         batched_forward = vmap(Layer.forward, (None, 0))
         return batched_forward(xs)
 
-def train(opt: optax.GradientTransformation, num_epochs: int, initial_state: LayerState, xs, ys):
+def train(opt: optax.GradientTransformation, num_epochs: int, batch_size: int, initial_state: LayerState, xs, ys):
     @jit
     def step(state: LayerState, pos_xs, neg_xs):
         loss, grads = value_and_grad(Layer.loss)(state.params, pos_xs, neg_xs)
@@ -103,29 +103,29 @@ def train(opt: optax.GradientTransformation, num_epochs: int, initial_state: Lay
     neg_xs = prepend_false_labels(xs, ys)
     loss_hist = []
 
+    pos_batches = list(batch(pos_xs, batch_size))
+    neg_batches = list(batch(neg_xs, batch_size))
+
     state = initial_state
 
-    for _ in tqdm(range(num_epochs)):
-        loss, state = step(state, pos_xs, neg_xs)
+    for epoch in tqdm(range(num_epochs)):
+        loss_sum = 0.
+        for pos_batch, neg_batch in zip(pos_batches, neg_batches):
+            loss, state = step(state, pos_batch, neg_batch)
+            loss_sum += loss
         loss_hist.append(loss)
     
     return state, loss_hist
 
-transform = Compose([
-    ToTensor(),
-    Normalize((0.1307,), (0.3081,)),
-    FlattenAndCast(),
-    ])
-
-mnist_train = MNIST('/tmp/mnist/', download=True, train=True, transform=transform)
+mnist_train = MNIST('/tmp/mnist/', download=True, train=True, transform=FlattenAndCast())
 training_generator = NumpyLoader(mnist_train, batch_size=60000, num_workers=0)
+xs, ys = next(iter(training_generator))
 
 opt = optax.adam(0.03)
 rng = random.PRNGKey(42)
 state = init_layer_state((784, 512), rng, opt)
 
-xs, ys = next(iter(training_generator))
-state, loss_hist = train(opt, 30, state, xs, ys)
+state, loss_hist = train(opt, 100, 128, state, xs, ys)
 
 #%%
 
